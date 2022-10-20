@@ -1,0 +1,189 @@
+---
+title: "Exam 2020"
+author: "AL"
+date: "9/12/2021"
+output: pdf_document
+---
+**1. Load audit2.csv. Standardize all predictors. Split the data set using the first 1162 observations for training and save the remaining observations in a test data set. How large is the share of Risk assigned observations in each data set?**
+
+```{R}
+data_pre=read.csv("audit2.csv")
+
+data=scale(data_pre[1:11])
+Risk=data_pre[12]
+data=as.data.frame(cbind(data,Risk))
+
+
+##str(data)
+
+## Then splitting the data set in to training and test set
+
+train_data=data[1:1162,]
+test_data=data[1163:1550,]
+
+## Looking at the share of risk for each data set
+
+cbind(train=mean(train_data$Risk),test=mean(test_data$Risk))
+
+```
+
+The Share of risk is about equal, which is good for our further prediction. 
+
+**2. Estimate a model for predicting Risk using logistic regression and all available predictors. What is the training and test set accuracy? Interpret your result.**
+
+```{R}
+log1=glm(Risk~., data = train_data, family = "binomial")
+summary(log1)
+
+probtrain=predict(log1, newdata = train_data, type="response")
+probtest=predict(log1, newdata = test_data, type="response")
+
+yhattrain=ifelse(probtrain>0.5, yes = 1, no=0)
+yhattest=ifelse(probtest>0.5, yes=1, no=0)
+
+'Accuracy'
+cbind(train=mean(yhattrain==train_data$Risk),test=mean(yhattest==test_data$Risk))
+```
+
+**3. Estimate a model for predicting Risk using logistic regression and all available predictors plus their two-way interactions. Calculate the in-sample error (log-likelihood function) and the AIC and BIC for this model and the model from 2). Which model is suggested by each of the three criteria? Interpret your results thoroughly.**
+```{R}
+log2=glm(Risk~.*., data= train_data, family= "binomial")
+
+'log-likelihood'
+cbind('log'=logLik(log1),'log^2'=logLik(log2))
+
+'AIC'
+cbind('log'=AIC(log1),'log^2'=AIC(log2))
+
+'BIC'
+cbind('log'=BIC(log1),'log^2'=BIC(log2))
+```
+
+As we see from the output above, the model with the two way interactions, is suggested by two of the three criterias. The likelihood function, where we want to maximaze the likelihood choose log^2, with the highest value of -547. If we look at AIC where we want to minimize the value, we again see the log^2 with the lowest value of 1228, so AIC also indicates log^2 is the superior model of the two. The only criteria that picks the normal logistic model is BIC, which have the lowest value of 1315. But we need to remember that BIC usually favors the smaller models, which log is because the model doesent contain the interactions. So based on the criterias we choose the log^2 model.  
+
+**4. Use a model averaging method suitable for logistic regression models using all available predictors for predicting risk. Which model receives the majority of the weight? Is this the true model?**
+```{R}
+library(MAMI)
+m_wAIC=mami(X=train_data, outcome = "Risk", method = "MA.criterion", model = "binomial", criterion = "AIC")
+summary(m_wAIC)
+
+
+```
+
+Here we see a model that contains all available predictor execpts for Numbers and ParaB, this is the model with the lowest AIC, which also means, the best model for predicting Risk. This is not the true model though, if we want to find the true model, we should use criterion BIC instead of AIC. 
+
+**5.Extend the predictor set further by adding all squared predictors and two-way interactions. Use a regularization approach for logistic regression that yields sparse solutions to estimate a model for predicting Risk. Propose a method to select your tuning parameter. Predict the Risk class using this approach. What is the test and training accuracy? Briefly interpret your results.**
+Since the qustions ask me to find a sparese solution, i would like to use l1 regularization also known as LASSO, since the model have the oppertunity to set coefficients to zero unlike rigde regression. 
+```{R}
+library(glmnet)
+options(scipen=999)
+modelaux <- as.formula(paste('Risk ~',".*. +",paste('poly(',colnames(train_data[-12]),',2)',collapse = ' + ')))
+
+mod.aux <- lm(modelaux, data = train_data)
+X <- model.matrix(mod.aux)[,!is.na(mod.aux$coefficients)][,-1]
+Y=train_data$Risk
+dim(X) 
+
+l.grid=10^seq(3,-2, length=100)
+cv_las=cv.glmnet(X,Y, alpha=1, nfolds=10, lamda=l.grid)
+bestlam=cv_las$lambda.min
+las=glmnet(X,Y, alpha=1, lambda = bestlam)
+
+trainprob=predict(las, newx = X, type="response")
+trainhat=ifelse(trainprob>0.5, yes = 1, no = 0)
+
+mod.aux2 <- lm(modelaux, data = test_data)
+Xtest <- model.matrix(mod.aux2)[,!is.na(mod.aux$coefficients)][,-1]
+testprob=predict(las, newx = Xtest, type="response")
+testhat=ifelse(testprob>0.5, yes = 1, no = 0)
+
+'accuracy'
+cbind(train=mean(trainhat==Y),test=mean(testhat==test_data$Risk))
+```
+
+**6. Use a super learner to combine at least two reasonable classication methods to predict the Risk class. Which method receives the most weight? Calculate the test error of the super learner.**
+```{R}
+library(SuperLearner)
+X=as.data.frame(X)
+
+mymethods=c("SL.glm", "SL.stepAIC")
+model.SL=SuperLearner(Y=train_data$Risk, X=train_data[-12], SL.library = mymethods, family = "binomial", method = "method.NNloglik")
+
+model.SL$coef
+model.SL$SL.predict
+
+probsl=predict(model.SL, newdata = test_data[-12], type="response")
+
+yhatsl=ifelse(probsl$pred>0.5, yes = 1, no=0)
+
+'accuracy'
+mean(yhatsl==test_data$Risk)
+```
+
+***PART 2***
+
+**Load audit2.csv. Discretize all the continuous variables (High/Low) using their median as a cutoff. Note: If you are not able to do this task, consider working only with the discrete variables in the dataset.**
+```{R}
+data_pre=read.csv("audit2.csv", stringsAsFactors = T)
+
+data_pre$Risk=as.factor(data_pre$Risk)
+data_pre$Score_A=as.factor(data_pre$Score_A)
+data_pre$numbers=as.factor(data_pre$numbers)
+data_pre$Score_B.1=as.factor(data_pre$Score_B.1)
+data_pre$Score_MV=as.factor(data_pre$Score_MV)
+data_pre$District_Loss=as.factor(data_pre$District_Loss)
+data_pre$History=as.factor(data_pre$History)
+
+data_pre$Sector_score=ifelse(median(Sector_score)>Sector_score, yes = 1, no=0)
+data_pre$PARA_A=ifelse(median(PARA_A)>PARA_A, yes = 1, no=0)
+data_pre$PARA_B=ifelse(median(PARA_B)>PARA_B, yes = 1, no=0)
+data_pre$TOTAL=ifelse(median(TOTAL)>TOTAL, yes = 1, no=0)
+data_pre$Money_Value=ifelse(median(Money_Value)>Money_Value, yes = 1, no=0)
+
+data_pre$Sector_score=as.factor(data_pre$Sector_score)
+data_pre$PARA_A=as.factor(data_pre$PARA_A)
+data_pre$PARA_B=as.factor(data_pre$PARA_B)
+data_pre$TOTAL=as.factor(data_pre$TOTAL)
+data_pre$Money_Value=as.factor(data_pre$Money_Value)
+
+#splitting the data set into training and test sample. 
+train_data=data_pre[1:1162,]
+test_data=data_pre[1163:1550,]
+```
+
+Now i am asked to predict the risk class using a naive bayes classifier. I have decided to use the naivebayes function from the e1071 library.
+
+```{R}
+library(e1071)
+library(caret)
+nbrisk=naiveBayes(as.factor(Risk)~., data = train_data)
+nbrisk$apriori
+nbrisk$tables
+
+yhatnb=predict(nbrisk, newdata = test_data, type="raw")
+yhatnb2=predict(nbrisk, newdata = test_data, type = "class")
+yhatnb2=as.factor(yhatnb2)
+caret::confusionMatrix(data = yhatnb2, reference= test_data$Risk, positive="1")
+
+library(caTools) 
+colAUC(yhatnb[,1], test_data$Risk, plotROC = TRUE) 
+```
+
+Generally the probabilities seems fine, but we see some conditions getting a 0 probability, that is history 5 and 0 with no risk, also numbers with borh risk and no risk. This is because there are no observation in the training data of a number value of 9
+
+**4. Estimate the probability of fraud for a firm with a high risk score value of the target-unit from summary report A and a high risk score value of the target-unit from summary report B.1. Using the Naive Bayes model with all the predictors (point 2.), evaluate which combination of predictors and their corresponding values is associated with the highest probability of fraud. For these inferences, use the train dataset.**
+
+```{R}
+
+sum=naiveBayes(Risk ~ Score_A + Score_B.1, data = train_data)
+sum
+predsum=predict(sum, newdata = train_data, type = "raw")
+predicted=cbind(train_data,predsum)
+head(predicted,100)
+
+nb=naiveBayes(Risk ~ ., data = train_data)
+
+probfull=predict(nb, newdata = train_data, type = "raw")
+predicted2=cbind(train_data,probfull[,2])
+predicted2[which.max(predicted2$`probfull[, 2]`),]
+```

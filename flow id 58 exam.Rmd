@@ -1,0 +1,292 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+Flow id: 58
+
+# a) Read DataLC01.csv in R Studio; the data should have 169,300 data records and 59 features. Transform the dependent variable loan_status into a factor.
+```{r}
+data=read.csv("dataLC01.csv")
+dim(data)
+data$loanstatus=as.factor(data$loanstatus)
+```
+From the dim function we see that the data frame has 169300 rows and 59 columns, which is also what matches the exercise. 
+
+# b) Set.seed (202) and sample randomly 5000 rows from the dataset. This will be your new dataset. Delete the variables homeownershipNONE and iswv.
+
+```{r}
+set.seed(202)
+samp=sample(nrow(data), size = 5000)
+data2=data[samp,]
+data2$homeownershipNONE=NULL
+data2$iswv=NULL
+```
+
+I use the sample function to generate 5000 random indices, the function has a defualt of replace=false, so the indices are unique. Then i remove the 2 columns im asked to remove.
+
+#c) Next, split the dataset randomly in two parts. 50% of the observations (i.e., 2500) should represent the training data, and 50% (i.e., 2500) should represent the testing data.
+```{r}
+samp2=sample(nrow(data2), size = 2500)
+train=data2[samp2,]
+test=data2[-samp2,]
+dim(train)
+dim(test)
+```
+again i run the dim function to see if dataframes are correct, which they are.
+
+#d) Train a random forest model with ntree = 10, using function train() in caret library with k-fold cross validation equal to 3. Which is the optimal value for the tuning parameter mtry based on the k-fold cross validation and what does mtry mean?
+```{r}
+library(caret)
+trainparam=trainControl(method = "cv", number = 3)
+rf=train(loanstatus~., data=train, method="rf", trControl=trainparam, ntree=10)
+
+rf$bestTune
+```
+In the output above i run a random forest model, with ntree=10 through the train command. Im also asked which mtry = is the optimal value, where i use k fold cv =3 to see that the optimal mtry is 2, using the besttune command from the train function. 
+mtry is the number of predictors we use to build the tree. So the best tree is build using 2 predictors. If you write rf$results, you can see the results of the cross validation with other mtry value and their results. 
+
+#e) Train a (gradient) boosting model using function train() with k-fold cross validation equal to 3, over a grid of tuning values for the parameter ntree (e.g., seq(5,50,500)). Keep interaction.depth = 4, shrinkage = 0.1, n.minobsinnode =10 to facilitate fast convergence.
+```{r}
+library(gbm)
+
+Grid <- expand.grid(n.trees = seq(5,50,500), interaction.depth = c(4), shrinkage = c(0.1), n.minobsinnode=10)
+
+gboost=train(loanstatus ~ ., train,
+                 method = 'gbm',
+                 tuneGrid=Grid,
+                 trControl=trainparam)
+```
+
+#f) Train an extreme gradient boosting model, tuning its most important parameters (max_depth, gamma and eta), using function train () with k-fold cross validation equal to 3. Report the accuracy of the model based on the k-fold cross validation.
+```{r}
+gridxgboost <- expand.grid(max_depth=3:6, gamma=c(0, 1, 2, 3, 5), eta=c(0.03, 0.06, 0.1, 0.2), nrounds=50,
+  subsample=0.5, colsample_bytree=0.1, min_child_weight = 1)
+xgboost <- train(loanstatus ~ ., train,
+                       method = "xgbTree",
+                 tuneGrid=gridxgboost,
+                       trControl = trainparam)
+xgboost$resample
+```
+
+From the xgboost$resample we get the accuracy from the 3 folds of the cross validation. We observe the highest accuracy in the second fold. 
+
+#g) Summarize the accuracy and kappa coefficient for the three models in a list. Which is the best model according to these criteria?
+```{r}
+results <- resamples(list(rf = rf,
+                          gboost  = gboost,
+                          xgboost = xgboost))
+
+# summary
+summary(results)
+bwplot(results)
+dotplot(results)
+```
+
+When comparing the three models, we see that the best performing model in terms of accuracy is the xgboost model. When comparing kappa we see that the gradient boost has the lowest with a mean of 0. 
+
+#h) Apply the models to the testing data and report AUC. Which is the best model according to AUC?
+```{r}
+library(caTools)
+predrf=predict(rf,test, type="prob")[,2]
+colAUC(predrf,test$loanstatus, plotROC = F)
+
+predgb=predict(gboost,test, type="prob")[,2]
+colAUC(predgb,test$loanstatus, plotROC = F)
+
+predxg=predict(xgboost,test, type="prob")[,2]
+colAUC(predxg,test$loanstatus, plotROC = F)
+```
+
+The model with the best AUC score is the gradient boosting model with a AUC  of 0.6660
+The xgboost model is very close with an AUC of 0.6561.
+
+#i) Display the variable importance for the model with the best AUC and identify the best predictors.
+```{r}
+summary(gboost)
+```
+From the summary function, we see that the most important variable is by far intrate.The second best predictor is totcurebal, but is far from as important as intrate. 
+
+#k) The loan data typically has a higher proportion of good loans. We can achieve high accuracy just by labeling all loans as Fully Paid. Calculate the accuracy by following this strategy. Compare it with the accuracy of the previous models and conclude.
+```{r}
+naive=seq(from=1,to=1, length=2500)
+test2=test
+test2$loanstatus=ifelse(test2$loanstatus=="Fully Paid", yes = 1, no=0)
+
+library(caret)
+confusionMatrix(as.factor(naive),as.factor(test2$loanstatus), positive = "1")
+
+predxg2=ifelse(predxg>0.5, yes = 1, no=0)
+confusionMatrix(as.factor(predxg2),as.factor(test2$loanstatus))
+```
+
+Making a confusing matrix for the naive prediction, saying that all loans are fully paid off, we see that the accuracy is 76,56%. It is actually higher than our best performing model, when looking at the insample accuracy. This means our models are not very capable of predicting loan status, since the naive guess of classyfying all our loans as fully paid of. This is also why we also seek to balance out each class. I only did the xgboost because it had the best insample accuracy, and im have issues with the time at the exam, otherwise i would have done every model. 
+
+
+###             PART B
+
+#1. Modify the code below such that it produces a two-layer convolutional neural network (CNN). The input for the network consists of 200x200 colour images. The target has 20 labels, and the task is a multi-class classification problem. The first layer produces 32 feature maps using a 5x5 filter, and the second layer produces 64 feature maps using a 5x5 filter. Use maximum pooling after each convolutional layer. Select the pooling size such that the output shape of the first layer is (48, 48, 32) and the output shape of the second layer is (22, 22, 64). Place a densely connected classifier on top of your CNN with one hidden layer containing 64 neurons. Use appropriate activation functions along the way. Show your final modified code and argue for all your choices.
+```{r}
+library(keras)
+model <- keras_model_sequential() %>% 
+layer_conv_2d(filters = 32,
+              kernel_size = c(5,5),
+              activation = "relu",
+              input_shape = c(200,200,3)) %>% 
+layer_max_pooling_2d(pool_size = c(4,4)) %>% 
+layer_conv_2d(filters = 64, 
+              kernel_size = c(5,5),
+              activation = "relu") %>%
+layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+layer_flatten() %>% 
+layer_dense(units=64, activation = "relu", input_shape = c(30976)) %>%
+layer_dense(units=20, activation = "softmax")
+```
+
+I have now modified the code and want to comment on the changes i made. I will start from the top of the code, were i set filter=32, because thats what im asked to do. Same with c(5,5) which is a 5x5 filter. then i set the input shape to c(200,200,3), because the imput is images, which probaly means the pictures have 200X200 pixels, and the 3 for the colour channel. One for blue, one for red, and one for green. then i put a max pooling with a size of 4x4, because we need the dimension to be 48,48,32.
+the second max pooling is 2,2 because we need to get down to 22,22,64. I use max pooling to get the most important features out, so i dont want averagin pooling. Then i put a layer flatten, to make it ready for the CNN, where i set units=64, so se we have 64 neuro in the hidden layer. Input shape is 30976, because that is the length of the vector the CNN will get. the last layer_dense is the output layer, where i have 20 units because we have 20 targe labels. I use the softmax function becasue we are dealing with multi classification. 
+
+#2. Imagine that you need to augment the images before they go into the above CNN. Now imagine your training data contains 500 images and your validation data contains 250 images. What specific batch size would you recommend and why for your training and validation generators? Based on your choice, what values do you need for steps_per_epoch and validation_steps in the fit_generator() function? Explain your reasoning.
+I go for at batch size of 20, steps_per_epoch of 100. I dont want a too big batch size since that can be too computiona dependt. 
+
+#3. Randomly draw 5% of the observations from the complaints data (complaints_train.csv) and prepare this subset for training such that the customer complaint narratives are cut after the mean sentence length, and only the top 1,000 words are considered. Use list-padding and embedding. Show your code.
+
+```{r echo=T, results='hide'}
+train=read.csv("complaints_train.csv")
+test=read.csv("complaints_test.csv")
+num=round(nrow(train)*0.05)
+samp5=sample(num)
+train=train[samp5, ]
+
+y_train=train$product
+y_train=as.factor(train$product)
+y_train=as.integer(y_train)
+y_train=y_train-1
+x_train=train$narrative
+
+y_test=test$product
+y_test=as.factor(test$product)
+y_test=as.integer(y_test)
+y_test=y_test-1
+x_test=test$narrative
+
+num_words <- 1000
+
+tokenizer <- text_tokenizer(
+  num_words = num_words,
+  filters = "!\"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n",
+  lower = TRUE,
+  split = " ",
+  char_level = FALSE,
+  oov_token = NULL
+) 
+
+tokenizer %>% fit_text_tokenizer(x_train)
+
+
+word_index <- tokenizer$word_index
+cat("Found", length(word_index), "unique tokens.\n")
+
+sequences <- texts_to_sequences(tokenizer, x_train)
+sequencest <- texts_to_sequences(tokenizer, x_test)
+sequences %>% head()
+sequencest %>% head()
+
+maxlen <- 25
+x_train <- pad_sequences(sequences, maxlen = maxlen)
+x_test = pad_sequences(sequencest, maxlen = maxlen)
+```
+
+I have no clue how to cut the complaints from the sentence length, so i dont wanna waste time. The code from above is my transformation to the list padding and embedding. I start by loading in the csv files and i just do the test set aswell. I start by making the labels go from 0 -> 4 since im not able to predict if the levels are from 1->5. Then i select the number of top words, which im asked to 1000, so i set 1000. Then i use the tokenizer function, which get rid of alle the weird signs. Eventhough the data dosent contains those i still use the function since i need a tokenizer to use the fit_text_tokenizer function to my train data. I rund the word index code just to show how many unique tokens i found in my train set, which was 12293. then is turn my text into sequensces. The last thing i do is the maxelen, where i only do the 25 words per complaint. Here i would have liked to do the mean sentence length, but i dont now how to calculate it Then i pad my sequences and have my train and test set converted.
+
+#4. Train a 1D convnet that we name COV1. COV1 has 50 dimensions in the embedding layer, 32 feature maps, and a kernel size of 7. On top, build a densely connected classifier with one hidden layer with 16 neurons. Experiment with the number of embedding dimensions. Which number of embedding dimensions do you prefer and why?
+```{r}
+COV1 <- keras_model_sequential() %>% 
+  layer_embedding(input_dim = num_words, output_dim = 50, input_length = maxlen) %>% 
+  layer_conv_1d(filters = 32, kernel_size = 7, activation = "relu") %>% layer_max_pooling_1d(5) %>% 
+  layer_flatten() %>% 
+  layer_dense(units = 16, input_shape = c(96), activation = "relu") %>% layer_dense(units = 5, activation = "softmax")
+
+COV1 %>% compile(
+  optimizer = "rmsprop",
+  loss = "sparse_categorical_crossentropy",
+  metrics = c("acc")
+)
+history <- COV1 %>% fit(
+  x_train, y_train,
+  epochs = 10,
+  batch_size = 32,
+  validation_split = 0.2,
+  verbose=0
+)
+
+plot(history)
+```
+
+In terms of embedding dimension, we need to consider not creating a bottleneck for the information flow. We can always adjust for overfitting, so i would go for at larger embedding dimension to start with. This could for example be 128. From the history plot we see that we get the lowest loss and highst accuracy validation at around epoch 3.
+
+#5. A downside to 1D convnets is that they are oblivious to sequence order outside the convolution window. Incorporate order-sensitivity into COV1 and train your new model. Does sentence order outside the window seem important for this dataset
+```{r}
+COV1gru <- keras_model_sequential() %>% 
+  layer_embedding(input_dim = num_words, output_dim = 50, input_length = maxlen) %>% 
+  layer_conv_1d(filters = 32, kernel_size = 7, activation = "relu") %>% layer_max_pooling_1d(5) %>% 
+  layer_gru(units = 96) %>%
+  layer_dense(units = 16, input_shape = c(96), activation = "relu") %>% layer_dense(units = 5, activation = "softmax")
+
+COV1gru %>% compile(
+  optimizer = "rmsprop",
+  loss = "sparse_categorical_crossentropy",
+  metrics = c("acc")
+)
+historycovgru <- COV1gru %>% fit(
+  x_train, y_train,
+  epochs = 10,
+  batch_size = 32,
+  validation_split = 0.2,
+  verbose=0
+)
+
+plot(historycovgru)
+```
+
+To combat the sequnce order problem, i incoporate a GRU layer, which is a RNN. Usually this would help with the order sensitive problem but i get a lower validation accuracy and higher loss. If i had more time i would stack more convolution and poling layers, but im in a hurry so i dont have time. In terms of if senctence order outside the window seems importance in this case i would say yes, since complaints probaly vary in sizes, and also the customer could be bad at explaining their problems and maybe not always get to the point, so i would say it is a problem. 
+
+
+#6. What would be the most obvious contender to COV1 for this specific dataset? Explain why this model is the most obvious contender and train it. Compare its performance to that of your best COV1 model.
+
+The most obvious contender would be a RNN model, i chose to go with a GRU Model, since its a bit more effecient than LSTM. The upside to RNN models are that they are not order sensivtive, since they have "memory". GRU uses its "update" gate to combine our x's but also previous hidden state from the x before, so it should not be sensitive to orders.The update gate decides which information to keep and what to throw away, sort of like the cell state of the LSTM. 
+
+```{r}
+GRU <- keras_model_sequential() %>% 
+  layer_embedding(input_dim = num_words, output_dim = 128, input_length = maxlen) %>% 
+  layer_gru(units = 32, dropout = 0.2, recurrent_dropout = 0.2) %>% layer_dense(units = 5, activation = "softmax")
+
+GRU %>% compile(
+  optimizer = "rmsprop",
+  loss = "sparse_categorical_crossentropy",
+  metrics = c("acc")
+)
+historyGRU <- GRU %>% fit(
+  x_train, y_train,
+  epochs = 10,
+  batch_size = 32,
+  validation_split = 0.2,
+  verbose=0
+)
+
+plot(historyGRU)
+
+```
+
+
+
+#7. Compute the test set performance of your best COV1 model and the contender model on the test data (complaints_test.csv). Discuss the following: What would be a good benchmark and why? What would be a good performance metric and why?
+```{r}
+resultsG<- GRU %>% evaluate(x_test,y_test, verbose=0)
+resultsC<- COV1 %>% evaluate(x_test,y_test, verbose=0)
+
+#GRU
+resultsG
+#COV1
+resultsC
+```
+We see that the GRU model beats the COV1 both in accuarcy and loss. Also by a fairly huge margin. I do expect that you easily could build better models. If i had more time i would have added more pooling and convultion layers to my COV1 model. This should increase its accuracy. 
